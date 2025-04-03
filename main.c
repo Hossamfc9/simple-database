@@ -12,6 +12,8 @@ typedef enum {
 } MetaCommandResult;
 
 typedef enum {
+    PREPARE_NEGATIVE_ID,
+    PREPARE_STRING_TOO_LONG,
     PREPARE_SUCCESS,
     PREPARE_SYNTAX_ERROR,
     PREPARE_UNRECOGNIZED_STATEMENT,
@@ -38,9 +40,15 @@ typedef struct {
 #define COLUMN_EMAIL_SIZE 255
 typedef struct {
     uint32_t id;
-    char username[COLUMN_USERNAME_SIZE];
-    char email[COLUMN_EMAIL_SIZE];
+    char username[COLUMN_USERNAME_SIZE + 1];
+    char email[COLUMN_EMAIL_SIZE + 1];
 } Row;
+
+typedef struct {
+    StatementType type;
+    Row* row_to_insert;
+} Statement;
+
 
 #define size_of_attribute(Struct, Attribute) sizeof(((Struct*)0)->Attribute)
 
@@ -89,11 +97,6 @@ void* row_slot(Table* table, uint32_t row_num) {
     return page + byte_offset;
 }
 
-typedef struct {
-    StatementType type;
-    Row* row_to_insert;
-} Statement;
-
 Statement* create_statement() {
     Statement* statement = malloc(sizeof(Statement));
     statement->row_to_insert = NULL;
@@ -118,16 +121,7 @@ MetaCommandResult do_meta_command(InputBuffer* input_buffer) {
 
 PrepareResult prepare_statement(InputBuffer* input_buffer, Statement* statement) {
     if(strncmp(input_buffer->buffer, "insert", 6) == 0) {
-        statement->type = STATEMENT_INSERT;
-        statement->row_to_insert = (Row*) malloc(sizeof(Row));
-        int args_assigned = sscanf(
-            input_buffer->buffer, "insert %d %s %s"
-            , &(statement->row_to_insert->id), statement->row_to_insert->username, statement->row_to_insert->email
-        );
-        if(args_assigned != 3) {
-            return PREPARE_SYNTAX_ERROR;
-        }
-        return PREPARE_SUCCESS;
+        prepare_insert(input_buffer, statement);
     }
     else if(strcmp(input_buffer->buffer, "select") == 0) {
         statement->type = STATEMENT_SELECT;
@@ -135,6 +129,33 @@ PrepareResult prepare_statement(InputBuffer* input_buffer, Statement* statement)
     }
 
     return PREPARE_UNRECOGNIZED_STATEMENT;
+}
+
+PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
+    statement->type = STATEMENT_INSERT;
+
+    char* keywrod = strtok(input_buffer->buffer, " ");
+    char* id_string = strtok(input_buffer->buffer, " ");
+    char* username = strtok(input_buffer->buffer, " ");
+    char* email = strtok(input_buffer->buffer, " ");
+    
+    if(id_string == NULL || username == NULL || email == NULL) {
+        return PREPARE_STRING_TOO_LONG;
+    }
+
+    int id = atoi(id_string);
+    if(strlen(username) > USERNAME_SIZE) {
+        return PREPARE_STRING_TOO_LONG;
+    }
+    if(strlen(email) > EMAIL_SIZE) {
+        return PREPARE_STRING_TOO_LONG;
+    }
+
+    statement->row_to_insert->id = id;
+    strcpy(statement->row_to_insert->username, username);
+    strcpy(statement->row_to_insert->email, email);
+
+    return PREPARE_SUCCESS;
 }
 
 void serialize_row(Row* source, void* destination) {
@@ -233,8 +254,13 @@ int main(int argc, char* argv[]) {
         }
         Statement* statement = create_statement();
         switch (prepare_statement(input_buffer, statement)) {
+            case (PREPARE_NEGATIVE_ID):
+                printf("ID must be positive.\n");
+                continue;
             case (PREPARE_SUCCESS):
                 break;
+            case (PREPARE_STRING_TOO_LONG):
+                printf("Error: string is too long.\n");
             case (PREPARE_SYNTAX_ERROR):
                 printf("Syntax error.\n");
                 continue;
